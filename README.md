@@ -299,7 +299,8 @@ The `PROXY` command will allow you to get specific info or perform actions that 
 
 # Commands that act differently from standard Redis commands or that have special behavior
 
-- PING: `PONG` is replied directly by the proxy
+- PING: `PONG` is replied directly by the proxy. When the optional message is
+        provided, the proxy echoes it as a bulk string, matching Redis.
 - MULTI: disables multiplexing for the calling client by creating a private
          connection in the client itself. **Note**: since it's required to be
          atomic, cross-slots queries cannot work inside a multi transaction.

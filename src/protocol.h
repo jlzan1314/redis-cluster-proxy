@@ -34,7 +34,7 @@
 #define ERROR_MERGE_REPLY_INVALID_FMT \
     "Invalid reply format while merging multiple replies from cluster"
 #define ERROR_NODE_DISCONNECTED "Cluster node disconnected: "
-#define ERROR_WRONG_ARGC "wrong number of arguments for '%' command"
+#define ERROR_WRONG_ARGC "wrong number of arguments for '%s' command"
 #define ERROR_INVALID_QUERY "Invalid query format"
 #define ERROR_NO_NODE "Failed to get node for query"
 #define ERROR_INVALID_REPLY "Invalid reply format from cluster"
