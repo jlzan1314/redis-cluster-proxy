@@ -23,8 +23,8 @@
  - DISCARD
  - DUMP
  - ECHO
- - EVAL
- - EVALSHA
+ - EVAL (**cross-slots unsupported**)
+ - EVALSHA (**cross-slots unsupported**)
  - EXEC
  - EXISTS (**sums multiple replies**)
  - EXPIRE
@@ -103,6 +103,7 @@
  - SADD
  - SAVE
  - SCAN
+ - SCRIPT (**LOAD/EXISTS/FLUSH are sent to all masters**)
  - SCARD
  - SDIFF
  - SDIFFSTORE (**cross-slots unsupported**)
@@ -200,7 +201,6 @@ Those commands are currently not supported by Redis Cluster Proxy.
  - REPLCONF
  - REPLICAOF
  - ROLE
- - SCRIPT
  - SHUTDOWN
  - SLAVEOF
  - SLOWLOG
@@ -209,5 +209,4 @@ Those commands are currently not supported by Redis Cluster Proxy.
  - TIME
  - UNSUBSCRIBE
  - WAIT
-
 

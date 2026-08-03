@@ -18,5 +18,7 @@ OLD_POD=$(kubectl get pod -n "$NAMESPACE" \
 
 echo "old pod: $OLD_POD"
 "$ROOT_DIR/scripts/test-ping-pod.sh" "$OLD_POD" "$NAMESPACE"
+"$ROOT_DIR/scripts/test-lua-pod.sh" "$OLD_POD" "$NAMESPACE" unsupported
 echo "new pod: $POD"
 "$ROOT_DIR/scripts/test-ping-pod.sh" "$POD" "$NAMESPACE"
+"$ROOT_DIR/scripts/test-lua-pod.sh" "$POD" "$NAMESPACE" supported

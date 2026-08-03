@@ -743,6 +743,48 @@ int pingCommand(void *r) {
     return PROXY_COMMAND_HANDLED;
 }
 
+int scriptCommand(void *r) {
+    clientRequest *req = r;
+    if (req->argc < 2) {
+        addReplyErrorWrongArgc(req->client, "script", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+
+    sds subcmd = sdsnewlen(req->buffer + req->offsets[1], req->lengths[1]);
+    int supported = 0, valid_argc = 0;
+    if (strcasecmp(subcmd, "load") == 0) {
+        supported = 1;
+        valid_argc = (req->argc == 3);
+    } else if (strcasecmp(subcmd, "exists") == 0) {
+        supported = 1;
+        valid_argc = (req->argc >= 3);
+    } else if (strcasecmp(subcmd, "flush") == 0) {
+        supported = 1;
+        valid_argc = (req->argc == 2 || req->argc == 3);
+    }
+
+    if (!supported) {
+        sds err = sdscatfmt(sdsempty(), "unsupported SCRIPT subcommand `%S`",
+                            subcmd);
+        addReplyError(req->client, err, req->id);
+        sdsfree(err);
+    } else if (!valid_argc) {
+        addReplyErrorWrongArgc(req->client, "script", req->id);
+    }
+    sdsfree(subcmd);
+
+    if (!supported || !valid_argc) {
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+
+    /* SCRIPT LOAD/EXISTS/FLUSH must run on every master. The command table
+     * marks SCRIPT for duplication, so let the generic routing path fan it
+     * out and let handleScriptReply consolidate the replies. */
+    return PROXY_COMMAND_UNHANDLED;
+}
+
 int multiCommand(void *r) {
     clientRequest *req = r;
     client *c = req->client;
@@ -1305,6 +1347,101 @@ int getFirstMultipleReply(void *_reply, void *_req, char *buf, int len) {
     return 1;
 }
 
+int handleScriptReply(void *_reply, void *_req, char *buf, int len) {
+    UNUSED(_reply);
+    UNUSED(buf);
+    UNUSED(len);
+    clientRequest *req = _req;
+    sds subcmd = sdsnewlen(req->buffer + req->offsets[1], req->lengths[1]);
+
+    if (strcasecmp(subcmd, "exists") != 0) {
+        sdsfree(subcmd);
+        return getFirstMultipleReply(NULL, req, NULL, 0);
+    }
+    sdsfree(subcmd);
+
+    int script_count = req->argc - 2;
+    int *exists = zmalloc(sizeof(int) * script_count);
+    if (exists == NULL) {
+        addReplyError(req->client, ERROR_OOM, req->id);
+        req->client->min_reply_id = req->max_child_reply_id + 1;
+        return 0;
+    }
+    int i;
+    for (i = 0; i < script_count; i++) exists[i] = 1;
+
+    raxIterator iter;
+    raxStart(&iter, req->child_replies);
+    if (!raxSeek(&iter, "^", NULL, 0)) {
+        raxStop(&iter);
+        zfree(exists);
+        addReplyError(req->client, ERROR_MULTIPLE_REPLIES_ITER_FAIL,
+                      req->id);
+        req->client->min_reply_id = req->max_child_reply_id + 1;
+        return 0;
+    }
+
+    char *err = NULL;
+    sds error_reply = NULL;
+    while (raxNext(&iter)) {
+        sds child_reply = iter.data;
+        if (child_reply == NULL) continue;
+        if (child_reply[0] == '-') {
+            error_reply = child_reply;
+            break;
+        }
+
+        char *p = child_reply;
+        char *end = child_reply + sdslen(child_reply);
+        if (p >= end || *p++ != '*') {
+            err = ERROR_INVALID_REPLY;
+            break;
+        }
+        char *number_end = NULL;
+        long elements = strtol(p, &number_end, 10);
+        if (number_end == p || number_end + 1 >= end ||
+            number_end[0] != '\r' || number_end[1] != '\n' ||
+            elements != script_count)
+        {
+            err = ERROR_INVALID_REPLY;
+            break;
+        }
+        p = number_end + 2;
+        for (i = 0; i < script_count; i++) {
+            if (p >= end || *p++ != ':') {
+                err = ERROR_INVALID_REPLY;
+                break;
+            }
+            long value = strtol(p, &number_end, 10);
+            if (number_end == p || number_end + 1 >= end ||
+                number_end[0] != '\r' || number_end[1] != '\n')
+            {
+                err = ERROR_INVALID_REPLY;
+                break;
+            }
+            exists[i] = exists[i] && (value != 0);
+            p = number_end + 2;
+        }
+        if (err != NULL) break;
+    }
+    raxStop(&iter);
+
+    if (error_reply != NULL) {
+        addReplyRaw(req->client, error_reply, sdslen(error_reply), req->id);
+    } else if (err != NULL) {
+        addReplyError(req->client, err, req->id);
+    } else {
+        sds reply = sdscatfmt(sdsempty(), "*%u\r\n", script_count);
+        for (i = 0; i < script_count; i++)
+            reply = sdscatfmt(reply, ":%i\r\n", exists[i]);
+        addReplyRaw(req->client, reply, sdslen(reply), req->id);
+        sdsfree(reply);
+    }
+    req->client->min_reply_id = req->max_child_reply_id + 1;
+    zfree(exists);
+    return 1;
+}
+
 int getRandomReply(void *_reply, void *_req, char *buf, int len) {
     UNUSED(_reply);
     UNUSED(buf);
@@ -1647,9 +1784,23 @@ int evalGetKeys(void *r, int *first_key, int *last_key, int *key_step,
         return -1;
     }
     sds numkeys_s = sdsnewlen(req->buffer + req->offsets[2], req->lengths[2]);
-    numkeys = atoi(numkeys_s);
-    *first_key = 3;
-    *last_key = 3 + numkeys;
+    char *numkeys_end = NULL;
+    long parsed_numkeys = strtol(numkeys_s, &numkeys_end, 10);
+    if (numkeys_end == numkeys_s || *numkeys_end != '\0' ||
+        parsed_numkeys < 0 || parsed_numkeys > req->argc - 3)
+    {
+        sdsfree(numkeys_s);
+        if (err) *err = "Invalid number of keys";
+        return -1;
+    }
+    numkeys = parsed_numkeys;
+    if (numkeys == 0) {
+        *first_key = 0;
+        *last_key = 0;
+    } else {
+        *first_key = 3;
+        *last_key = *first_key + numkeys - 1;
+    }
     *key_step = 1;
     sdsfree(numkeys_s);
     return numkeys;

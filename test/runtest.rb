@@ -44,7 +44,7 @@ $options = opts.options
 
 $tests = ARGV
 if $tests.length == 0
-    $tests = %w(ping basic_commands commands_with_key_callback pipeline query_parser
+    $tests = %w(ping lua basic_commands commands_with_key_callback pipeline query_parser
                 multislot client_disconnect node_down proxy_command 
                 disable_multiplexing auth multi cluster_errors 
                 cluster_errors_multislot unixsocket misc)
