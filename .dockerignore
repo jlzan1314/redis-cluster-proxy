@@ -1,0 +1,10 @@
+.gitignore
+deps/hiredis/*.o
+deps/hiredis/*.a
+deps/.make-*
+src/*.o
+src/Makefile.dep
+src/.make-*
+src/redis-cluster-proxy
+test/tmp
+*.log

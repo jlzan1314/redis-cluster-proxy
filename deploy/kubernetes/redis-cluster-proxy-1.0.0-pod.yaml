@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: redis-cluster-proxy-ping-fixed-1-0-0
+  namespace: redis
+  labels:
+    app: redis-cluster-proxy-ping-fixed
+    version: 1.0.0
+spec:
+  containers:
+    - name: proxy
+      image: gamesirnanjing.asuscomm.com:5000/gamehub/redis-cluster-proxy:1.0.0
+      imagePullPolicy: Always
+      args:
+        - -c
+        - /etc/redis/proxy.conf
+      ports:
+        - containerPort: 7777
+          protocol: TCP
+      livenessProbe:
+        tcpSocket:
+          port: 7777
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 1
+        failureThreshold: 3
+      readinessProbe:
+        tcpSocket:
+          port: 7777
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 1
+        failureThreshold: 3
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      volumeMounts:
+        - name: proxy-config
+          mountPath: /etc/redis/proxy.conf
+          subPath: proxy.conf
+  restartPolicy: Always
+  terminationGracePeriodSeconds: 30
+  volumes:
+    - name: proxy-config
+      configMap:
+        name: redis-cluster-proxy-config
