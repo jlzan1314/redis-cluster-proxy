@@ -5,9 +5,9 @@ Date: 2026-08-03 (Asia/Shanghai)
 ## Image
 
 - Tag: `gamesirnanjing.asuscomm.com:5000/gamehub/redis-cluster-proxy:1.0.0`
-- Digest: `sha256:9dac1d15e8e572c06095e4d29402d976243047649129c2d9a9f887ba75ef5c7c`
+- Digest: `sha256:1d2f8f604ec08008e753e02dbd8ce54d6fd8b7c5a159bc6123ad68a537b8e9ef`
 - Source branch: `fix/ping-request-leak`
-- Image source revision: `cb9c24bd970a58c019e1dbbe1866a94ae85e5d75`
+- Image source revision: `84e19c37d79d3ac38f3adba83382d7260b8c379d`
 
 ## Pods
 
@@ -79,9 +79,21 @@ evalsha_value=evalsha-value
 ```
 
 The fixed implementation corrects the EVAL/EVALSHA `numkeys` range and sends
-SCRIPT LOAD/EXISTS/FLUSH to every master. A Go program using
+all Redis 6 SCRIPT subcommands to every master. A Go program using
 `github.com/redis/go-redis/v9` also passed `redis.NewScript().Run`,
 `ScriptLoad`, and `ScriptExists` through the fixed Pod.
+
+Additional Redis 6 Lua command verification on the current image:
+
+```text
+script_help_has_debug=yes
+script_debug_no=OK
+script_kill_idle=NOTBUSY No scripts in execution right now.
+script_exists_loaded_missing=1,0
+eval_two_same_slot=2
+script_flush=OK
+script_exists_after_flush=0
+```
 
 ## go-zero breaker verification
 
@@ -101,6 +113,43 @@ breaker stays closed.
 Remote services that connect directly to the Redis Cluster continue to use
 `Type: cluster`; `Type: node` applies only when the address is this proxy.
 
+Current canary result:
+
+```text
+LOAD total=60000 ping=20000 exists=20000 hmget=20000 elapsed=24.222s command_errors=0 ping_false=0 breaker_open=0
+PASS go-zero breaker stayed closed
+RESULT PASS
+```
+
+The first high-concurrency run against the previous canary image exposed
+`ERR unsupported command hello`: go-redis v9 sends HELLO when it creates each
+connection, and go-zero counted those handshake errors as breaker failures.
+The current image handles HELLO and CLIENT SETINFO locally, so the same test
+finishes with zero command errors and zero open-breaker responses.
+
+## Direct Redis Cluster verification
+
+The `gamehub-pre` community service currently uses
+`redis-cluster.redis-pre.svc.cluster.local:6379` with `Type: cluster`; it does
+not traverse redis-cluster-proxy. From the running community Pod, go-zero
+v1.9.0 passed the same hot-score EXISTS/HMGET/pipeline flow, PING, and
+`ScriptRun` directly against that cluster:
+
+```text
+PASS NewRedis type=cluster host=redis-cluster.redis-pre.svc.cluster.local:6379
+PASS PING
+PASS PIPELINE/HMGET community_hot_score flow
+PASS go-zero ScriptRun
+LOAD total=15000 elapsed=819ms errors=0 ping_false=0 breaker_open=0
+RESULT PASS
+```
+
+Therefore the historical community log at `2026-08-03T19:28:05+08:00` was
+not produced through this proxy. `circuit breaker is open` is the secondary
+go-zero breaker result; the preceding Redis command/network error from that
+old community Pod is required to determine its original trigger. The current
+community Pod has no matching breaker errors in its available logs.
+
 ## Replay
 
 ```sh
@@ -109,4 +158,5 @@ Remote services that connect directly to the Redis Cluster continue to use
 ```
 
 `deploy-ping-fixed-pod.sh` intentionally does not update or delete the old
-Deployment, Pod, or Service.
+Deployment, Pod, or Service. Re-testing the old Pod is opt-in with
+`TEST_OLD=true` because its persistent PING leak has already been reproduced.

@@ -3,6 +3,7 @@ set -eu
 
 NAMESPACE="${NAMESPACE:-redis}"
 POD="${POD:-redis-cluster-proxy-ping-fixed-1-0-0}"
+TEST_OLD="${TEST_OLD:-false}"
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MANIFEST="$ROOT_DIR/deploy/kubernetes/redis-cluster-proxy-1.0.0-pod.yaml"
 
@@ -22,8 +23,16 @@ OLD_POD=$(kubectl get pod -n "$NAMESPACE" \
   -o jsonpath='{.items[0].metadata.name}')
 
 echo "old pod: $OLD_POD"
-"$ROOT_DIR/scripts/test-ping-pod.sh" "$OLD_POD" "$NAMESPACE"
-"$ROOT_DIR/scripts/test-lua-pod.sh" "$OLD_POD" "$NAMESPACE" unsupported
+if [ "$TEST_OLD" = "true" ]; then
+  # The old implementation leaks each persistent PING request. Keep this
+  # comparison opt-in so routine canary redeployments do not add avoidable
+  # memory pressure to the production Pod.
+  "$ROOT_DIR/scripts/test-ping-pod.sh" "$OLD_POD" "$NAMESPACE"
+  "$ROOT_DIR/scripts/test-lua-pod.sh" "$OLD_POD" "$NAMESPACE" unsupported
+else
+  echo "old pod tests skipped (set TEST_OLD=true to compare again)"
+fi
 echo "new pod: $POD"
 "$ROOT_DIR/scripts/test-ping-pod.sh" "$POD" "$NAMESPACE"
 "$ROOT_DIR/scripts/test-lua-pod.sh" "$POD" "$NAMESPACE" supported
+NAMESPACE="$NAMESPACE" POD="$POD" "$ROOT_DIR/scripts/test-gozero-pod.sh"
