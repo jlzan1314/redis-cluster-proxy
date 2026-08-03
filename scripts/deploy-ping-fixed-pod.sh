@@ -8,6 +8,11 @@ MANIFEST="$ROOT_DIR/deploy/kubernetes/redis-cluster-proxy-1.0.0-pod.yaml"
 
 # This creates an independent canary Pod. It intentionally does not change or
 # delete the existing redis-cluster-proxy Deployment/Pod/Service.
+if kubectl get pod -n "$NAMESPACE" "$POD" >/dev/null 2>&1; then
+  # Recreate only the canary so imagePullPolicy=Always resolves the current
+  # image digest when the explicit version tag is rebuilt.
+  kubectl delete pod -n "$NAMESPACE" "$POD" --wait=true
+fi
 kubectl apply -f "$MANIFEST"
 kubectl wait -n "$NAMESPACE" --for=condition=Ready "pod/$POD" --timeout=180s
 kubectl get pod -n "$NAMESPACE" "$POD" -o wide
