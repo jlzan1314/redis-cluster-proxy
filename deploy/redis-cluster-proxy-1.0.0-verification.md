@@ -83,6 +83,24 @@ SCRIPT LOAD/EXISTS/FLUSH to every master. A Go program using
 `github.com/redis/go-redis/v9` also passed `redis.NewScript().Run`,
 `ScriptLoad`, and `ScriptExists` through the fixed Pod.
 
+## go-zero breaker verification
+
+Run the go-zero v1.9.0 compatibility and load test against the canary Pod:
+
+```sh
+./scripts/test-gozero-pod.sh
+```
+
+The test uses the proxy as a single Redis endpoint (`Type: node`) and covers
+PING, SET/GET/EXISTS/EXPIRE/TTL/INCR, the community hot-score
+EXISTS/HMGET/pipeline flow, EVAL/EVALSHA, SCRIPT LOAD, and go-zero
+`ScriptRun`. It also creates concurrent connections so the go-redis v9 HELLO
+and CLIENT SETINFO handshake is exercised and verifies that the go-zero
+breaker stays closed.
+
+Remote services that connect directly to the Redis Cluster continue to use
+`Type: cluster`; `Type: node` applies only when the address is this proxy.
+
 ## Replay
 
 ```sh

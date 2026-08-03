@@ -301,9 +301,14 @@ The `PROXY` command will allow you to get specific info or perform actions that 
 
 - PING: `PONG` is replied directly by the proxy. When the optional message is
         provided, the proxy echoes it as a bulk string, matching Redis.
+- HELLO and CLIENT SETINFO: connection negotiation and go-redis client
+        identity are handled locally so Redis v9 clients do not produce
+        harmless setup errors that go-zero would count as breaker failures.
 - EVAL/EVALSHA: scripts are routed using the keys declared by `numkeys`.
-- SCRIPT LOAD/EXISTS/FLUSH: the command is sent to every master so cached
-        scripts are available regardless of the key slot used by EVALSHA.
+- SCRIPT: LOAD/EXISTS/FLUSH/KILL/HELP are sent to every master. DEBUG also
+        switches the caller to private connections, preserving its
+        connection-local behavior. Cached scripts are therefore available
+        regardless of the key slot used by EVALSHA.
 - MULTI: disables multiplexing for the calling client by creating a private
          connection in the client itself. **Note**: since it's required to be
          atomic, cross-slots queries cannot work inside a multi transaction.

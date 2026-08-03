@@ -15,6 +15,7 @@
  - BRPOPLPUSH
  - BZPOPMAX (**disables multiplexing**)
  - BZPOPMIN (**disables multiplexing**)
+ - CLIENT (**SETINFO/SETNAME/GETNAME/ID are handled locally**)
  - COMMAND
  - DBSIZE (**sums multiple replies**)
  - DECR
@@ -59,6 +60,7 @@
  - HSETNX
  - HSTRLEN
  - HVALS
+ - HELLO (**handled locally; RESP2 and RESP3 negotiation**)
  - INCR
  - INCRBY
  - INCRBYFLOAT
@@ -103,7 +105,7 @@
  - SADD
  - SAVE
  - SCAN
- - SCRIPT (**LOAD/EXISTS/FLUSH are sent to all masters**)
+ - SCRIPT (**all Redis 6 subcommands are sent to all masters; DEBUG disables multiplexing**)
  - SCARD
  - SDIFF
  - SDIFFSTORE (**cross-slots unsupported**)
@@ -178,11 +180,9 @@ Those commands are currently not supported by Redis Cluster Proxy.
 
  - ACL
  - ASKING
- - CLIENT
  - CLUSTER
  - CONFIG
  - DEBUG
- - HELLO
  - INFO
  - LATENCY
  - MEMORY
@@ -209,4 +209,3 @@ Those commands are currently not supported by Redis Cluster Proxy.
  - TIME
  - UNSUBSCRIBE
  - WAIT
-

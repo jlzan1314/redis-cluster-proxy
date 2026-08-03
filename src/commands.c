@@ -26,6 +26,8 @@ int commandWithPrivateConnection(void *req);
 int xreadCommand(void *req);
 int securityWarningCommand(void *req);
 int pingCommand(void *req);
+int helloCommand(void *req);
+int clientCommand(void *req);
 int authCommand(void *req);
 int scanCommand(void *req);
 int scriptCommand(void *req);
@@ -58,7 +60,7 @@ struct redisCommandDef redisCommandTable[203] = {
     {"pfmerge", -2, 1, -1, 1, 0, 0, NULL, NULL, NULL},
     {"strlen", 2, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"shutdown", -1, 0, 0, 0, 0, 1, NULL, NULL, NULL},
-    {"hello", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
+    {"hello", -1, 0, 0, 0, 0, 0, NULL, helloCommand, NULL},
     {"hincrby", 4, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"multi", 1, 0, 0, 0, 0, 0, NULL, multiCommand, NULL},
     {"script", -2, 0, 0, 0,
@@ -271,7 +273,7 @@ struct redisCommandDef redisCommandTable[203] = {
     {"zrangebylex", -4, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"linsert", 5, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"lpushx", -3, 1, 1, 1, 0, 0, NULL, NULL, NULL},
-    {"client", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
+    {"client", -2, 0, 0, 0, 0, 0, NULL, clientCommand, NULL},
     {"memory", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
     {"exists", -2, 1, -1, 1, 0, 0, NULL, NULL, sumReplies},
     {"pexpire", 3, 1, 1, 1, 0, 0, NULL, NULL, NULL},

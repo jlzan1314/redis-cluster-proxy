@@ -743,6 +743,103 @@ int pingCommand(void *r) {
     return PROXY_COMMAND_HANDLED;
 }
 
+/* HELLO is issued automatically for every new connection by recent Redis
+ * clients (including go-redis v9, which is used by go-zero). Forwarding it to
+ * a shared cluster connection would change that upstream connection's RESP
+ * mode for every multiplexed client, so negotiate it locally instead.
+ *
+ * The proxy continues to emit RESP2-compatible command replies. RESP3
+ * clients accept the RESP2 array representation of the HELLO map, and the
+ * response explicitly reports the protocol requested by the client. AUTH is
+ * accepted here because a proxy configured with upstream credentials already
+ * authenticates every connected client automatically. SETNAME is connection
+ * metadata and is intentionally kept local. */
+int helloCommand(void *r) {
+    clientRequest *req = r;
+    client *c = req->client;
+    long protocol = 2;
+    int i = 1;
+
+    if (req->argc > 1) {
+        sds version = sdsnewlen(req->buffer + req->offsets[1],
+                                req->lengths[1]);
+        char *end = NULL;
+        protocol = strtol(version, &end, 10);
+        int valid = (end != version && *end == '\0' &&
+                     (protocol == 2 || protocol == 3));
+        sdsfree(version);
+        if (!valid) {
+            addReplyError(c, "NOPROTO unsupported protocol version", req->id);
+            freeRequest(req);
+            return PROXY_COMMAND_HANDLED;
+        }
+        i = 2;
+    }
+
+    while (i < req->argc) {
+        sds option = sdsnewlen(req->buffer + req->offsets[i],
+                               req->lengths[i]);
+        if (strcasecmp(option, "auth") == 0 && i + 2 < req->argc) {
+            i += 3;
+        } else if (strcasecmp(option, "setname") == 0 &&
+                   i + 1 < req->argc)
+        {
+            i += 2;
+        } else {
+            sdsfree(option);
+            addReplyError(c, "syntax error", req->id);
+            freeRequest(req);
+            return PROXY_COMMAND_HANDLED;
+        }
+        sdsfree(option);
+    }
+
+    sds reply = sdscatprintf(sdsempty(),
+        "*14\r\n"
+        "$6\r\nserver\r\n$19\r\nredis-cluster-proxy\r\n"
+        "$7\r\nversion\r\n$5\r\n1.0.0\r\n"
+        "$5\r\nproto\r\n:%ld\r\n"
+        "$2\r\nid\r\n:%" PRId64 "\r\n"
+        "$4\r\nmode\r\n$7\r\ncluster\r\n"
+        "$4\r\nrole\r\n$6\r\nmaster\r\n"
+        "$7\r\nmodules\r\n*0\r\n",
+        protocol, c->id);
+    addReplyRaw(c, reply, sdslen(reply), req->id);
+    sdsfree(reply);
+    freeRequest(req);
+    return PROXY_COMMAND_HANDLED;
+}
+
+/* Modern clients send CLIENT SETINFO immediately after HELLO. These fields
+ * only describe the client library and have no routing or authentication
+ * effect, so acknowledge them locally instead of turning harmless connection
+ * setup into Redis errors (which go-zero counts as breaker failures). */
+int clientCommand(void *r) {
+    clientRequest *req = r;
+    client *c = req->client;
+    sds subcmd = sdsnewlen(req->buffer + req->offsets[1],
+                           req->lengths[1]);
+
+    if (strcasecmp(subcmd, "setinfo") == 0 && req->argc == 4) {
+        addReplyString(c, "OK", req->id);
+    } else if (strcasecmp(subcmd, "setname") == 0 && req->argc == 3) {
+        addReplyString(c, "OK", req->id);
+    } else if (strcasecmp(subcmd, "getname") == 0 && req->argc == 2) {
+        addReplyNull(c, req->id);
+    } else if (strcasecmp(subcmd, "id") == 0 && req->argc == 2) {
+        addReplyInt(c, c->id, req->id);
+    } else {
+        sds err = sdscatfmt(sdsempty(), "unsupported CLIENT subcommand `%S`",
+                            subcmd);
+        addReplyError(c, err, req->id);
+        sdsfree(err);
+    }
+
+    sdsfree(subcmd);
+    freeRequest(req);
+    return PROXY_COMMAND_HANDLED;
+}
+
 int scriptCommand(void *r) {
     clientRequest *req = r;
     if (req->argc < 2) {
@@ -753,6 +850,7 @@ int scriptCommand(void *r) {
 
     sds subcmd = sdsnewlen(req->buffer + req->offsets[1], req->lengths[1]);
     int supported = 0, valid_argc = 0;
+    int needs_private_connection = 0;
     if (strcasecmp(subcmd, "load") == 0) {
         supported = 1;
         valid_argc = (req->argc == 3);
@@ -762,6 +860,15 @@ int scriptCommand(void *r) {
     } else if (strcasecmp(subcmd, "flush") == 0) {
         supported = 1;
         valid_argc = (req->argc == 2 || req->argc == 3);
+    } else if (strcasecmp(subcmd, "kill") == 0 ||
+               strcasecmp(subcmd, "help") == 0)
+    {
+        supported = 1;
+        valid_argc = (req->argc == 2);
+    } else if (strcasecmp(subcmd, "debug") == 0) {
+        supported = 1;
+        valid_argc = (req->argc == 3);
+        needs_private_connection = 1;
     }
 
     if (!supported) {
@@ -779,7 +886,10 @@ int scriptCommand(void *r) {
         return PROXY_COMMAND_HANDLED;
     }
 
-    /* SCRIPT LOAD/EXISTS/FLUSH must run on every master. The command table
+    if (needs_private_connection)
+        return commandWithPrivateConnection(req);
+
+    /* Every SCRIPT subcommand must run on every master. The command table
      * marks SCRIPT for duplication, so let the generic routing path fan it
      * out and let handleScriptReply consolidate the replies. */
     return PROXY_COMMAND_UNHANDLED;
@@ -1353,6 +1463,37 @@ int handleScriptReply(void *_reply, void *_req, char *buf, int len) {
     UNUSED(len);
     clientRequest *req = _req;
     sds subcmd = sdsnewlen(req->buffer + req->offsets[1], req->lengths[1]);
+
+    if (strcasecmp(subcmd, "kill") == 0) {
+        sdsfree(subcmd);
+        raxIterator iter;
+        raxStart(&iter, req->child_replies);
+        if (!raxSeek(&iter, "^", NULL, 0)) {
+            raxStop(&iter);
+            addReplyError(req->client, ERROR_MULTIPLE_REPLIES_ITER_FAIL,
+                          req->id);
+            return 0;
+        }
+        sds first_error = NULL, success_reply = NULL;
+        while (raxNext(&iter)) {
+            sds child_reply = iter.data;
+            if (child_reply == NULL) continue;
+            if (child_reply[0] == '-') {
+                if (first_error == NULL) first_error = child_reply;
+            } else {
+                success_reply = child_reply;
+                break;
+            }
+        }
+        raxStop(&iter);
+        sds reply = (success_reply != NULL ? success_reply : first_error);
+        if (reply != NULL)
+            addReplyRaw(req->client, reply, sdslen(reply), req->id);
+        else
+            addReplyError(req->client, ERROR_INVALID_REPLY, req->id);
+        req->client->min_reply_id = req->max_child_reply_id + 1;
+        return (reply != NULL);
+    }
 
     if (strcasecmp(subcmd, "exists") != 0) {
         sdsfree(subcmd);
