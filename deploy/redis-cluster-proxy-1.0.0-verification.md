@@ -13,8 +13,28 @@ Date: 2026-08-03 (Asia/Shanghai)
 
 - Existing Pod retained: `redis/redis-cluster-proxy-5787cc497d-ch692`
 - Independent fixed Pod created: `redis/redis-cluster-proxy-ping-fixed-1-0-0`
+- Independent fixed Service created: `redis/redis-cluster-proxy-ping-fixed`
 - The existing Service still has only the old Pod endpoint. The fixed Pod is a
-  canary and does not receive production Service traffic.
+  canary and does not receive traffic from the existing production Service.
+  The new Service selects only the fixed canary Pod and is available inside
+  the cluster at
+  `redis-cluster-proxy-ping-fixed.redis.svc.cluster.local:7777`.
+
+Current Service verification:
+
+```text
+service=redis-cluster-proxy-ping-fixed
+cluster_ip=172.16.25.50
+endpoint=10.16.0.67:7777
+pod_ip=10.16.0.67
+service_ping=PONG
+service_eval=service-ok
+service_evalsha=OK
+```
+
+The old `redis-cluster-proxy` Service remains unchanged at
+`172.16.236.114:7777`, with only the old Pod endpoint
+`10.16.0.198:7777`.
 
 ## PING verification
 

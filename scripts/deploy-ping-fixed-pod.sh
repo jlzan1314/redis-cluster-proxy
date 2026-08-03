@@ -6,6 +6,7 @@ POD="${POD:-redis-cluster-proxy-ping-fixed-1-0-0}"
 TEST_OLD="${TEST_OLD:-false}"
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MANIFEST="$ROOT_DIR/deploy/kubernetes/redis-cluster-proxy-1.0.0-pod.yaml"
+SERVICE_MANIFEST="$ROOT_DIR/deploy/kubernetes/redis-cluster-proxy-1.0.0-service.yaml"
 
 # This creates an independent canary Pod. It intentionally does not change or
 # delete the existing redis-cluster-proxy Deployment/Pod/Service.
@@ -16,7 +17,10 @@ if kubectl get pod -n "$NAMESPACE" "$POD" >/dev/null 2>&1; then
 fi
 kubectl apply -f "$MANIFEST"
 kubectl wait -n "$NAMESPACE" --for=condition=Ready "pod/$POD" --timeout=180s
+kubectl apply -f "$SERVICE_MANIFEST"
 kubectl get pod -n "$NAMESPACE" "$POD" -o wide
+kubectl get service -n "$NAMESPACE" redis-cluster-proxy-ping-fixed -o wide
+kubectl get endpoints -n "$NAMESPACE" redis-cluster-proxy-ping-fixed -o wide
 
 OLD_POD=$(kubectl get pod -n "$NAMESPACE" \
   -l app=redis-cluster-proxy \
