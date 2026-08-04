@@ -1,15 +1,18 @@
 # redis-cluster-proxy 1.0.0 deployment verification
 
-Date: 2026-08-03 (Asia/Shanghai)
+Date: 2026-08-04 (Asia/Shanghai)
 
 ## Image
 
+- Scope: canary Pod only; the original production Deployment is unchanged.
 - Tag: `gamesirnanjing.asuscomm.com:5000/gamehub/redis-cluster-proxy:1.0.0`
-- Digest: `sha256:1d2f8f604ec08008e753e02dbd8ce54d6fd8b7c5a159bc6123ad68a537b8e9ef`
+- Digest: `sha256:0ea244111fd5a680f28ea17e258e313f3bb04ed96fe7c00aa33163a75776534a`
 - Source branch: `fix/ping-request-leak`
-- Image source revision: `84e19c37d79d3ac38f3adba83382d7260b8c379d`
+- Source base revision: `06e92e9fa207ebb8167ca26b6e97b7db3c4de098`
+- The downstream authentication changes are in the current working tree; the
+  image digest above is the authoritative deployed artifact identity.
 
-## Pods
+## Initial canary Pods (2026-08-03)
 
 - Existing Pod retained: `redis/redis-cluster-proxy-5787cc497d-ch692`
 - Independent fixed Pod created: `redis/redis-cluster-proxy-ping-fixed-1-0-0`
@@ -20,7 +23,7 @@ Date: 2026-08-03 (Asia/Shanghai)
   the cluster at
   `redis-cluster-proxy-ping-fixed.redis.svc.cluster.local:7777`.
 
-Current Service verification:
+Initial Service verification:
 
 ```text
 service=redis-cluster-proxy-ping-fixed
@@ -32,9 +35,75 @@ service_eval=service-ok
 service_evalsha=OK
 ```
 
-The old `redis-cluster-proxy` Service remains unchanged at
-`172.16.236.114:7777`, with only the old Pod endpoint
-`10.16.0.198:7777`.
+The `redis-cluster-proxy` production Service and Deployment remain on the
+original image. Only the independent canary Pod and Service use the fixed
+image.
+
+## Downstream authentication canary
+
+The ConfigMap already contained `auth-user default` and `auth <password>`, but
+the original proxy treated those values only as credentials for its upstream
+Redis Cluster connections. It automatically authenticated shared connections,
+so a new downstream client could issue `PING`, `GET`, and other commands
+without first sending `AUTH`.
+
+The fixed proxy tracks authentication state per downstream client. When
+`auth` is configured, only `AUTH` and `HELLO ... AUTH` are accepted until the
+client proves the configured credentials. Other commands return
+`NOAUTH Authentication required.` and invalid credentials return `WRONGPASS`.
+The credentials are still used separately for the proxy's upstream cluster
+connections.
+
+Baseline command, run before the fix against both Pods:
+
+```sh
+./scripts/test-auth-pod.sh POD redis open
+```
+
+Baseline result from both the old production Pod and old canary image:
+
+```text
+noauth_ping=PONG
+noauth_get=
+wrong_auth=WRONGPASS invalid username-password pair or user is disabled.
+```
+
+Final command, run against the current canary Pod:
+
+```sh
+./scripts/test-auth-pod.sh POD redis required
+```
+
+Final result:
+
+```text
+noauth_ping=NOAUTH Authentication required.
+noauth_get=NOAUTH Authentication required.
+wrong_auth=WRONGPASS invalid username-password pair or user is disabled.
+correct_auth=OK
+authed_ping=PONG
+hello_auth_server=redis-cluster-proxy
+wrong_hello=WRONGPASS invalid username-password pair or user is disabled.
+```
+
+Current production and canary state after restoring the original production
+Deployment:
+
+```text
+production_pod=redis-cluster-proxy-5787cc497d-4xd8s
+production_image=acs-reg.alipay.com/kornrunner/redis-cluster-proxy:latest
+production_image_digest=sha256:d81a8e018808493923dee1484c7aba1f74fea31399852c1a2ed88ff254cf8145
+production_endpoint=10.16.0.104:7777
+production_noauth=PONG
+canary_pod=redis-cluster-proxy-ping-fixed-1-0-0
+canary_endpoint=10.16.0.98:7777
+canary_image_digest=sha256:0ea244111fd5a680f28ea17e258e313f3bb04ed96fe7c00aa33163a75776534a
+canary_noauth=NOAUTH Authentication required.
+canary_auth=PONG
+```
+
+The fixed image is not selected by the production Service. Production remains
+open exactly as before; only the canary listener enforces downstream AUTH.
 
 ## PING verification
 
@@ -123,7 +192,9 @@ Run the go-zero v1.9.0 compatibility and load test against the canary Pod:
 ./scripts/test-gozero-pod.sh
 ```
 
-The test uses the proxy as a single Redis endpoint (`Type: node`) and covers
+The test reads the configured password from the mounted proxy configuration
+without printing it, passes it through `RedisConf.Pass`, and uses the proxy as
+a single Redis endpoint (`Type: node`). It covers
 PING, SET/GET/EXISTS/EXPIRE/TTL/INCR, the community hot-score
 EXISTS/HMGET/pipeline flow, EVAL/EVALSHA, SCRIPT LOAD, and go-zero
 `ScriptRun`. It also creates concurrent connections so the go-redis v9 HELLO
@@ -136,7 +207,7 @@ Remote services that connect directly to the Redis Cluster continue to use
 Current canary result:
 
 ```text
-LOAD total=60000 ping=20000 exists=20000 hmget=20000 elapsed=24.222s command_errors=0 ping_false=0 breaker_open=0
+LOAD total=60000 ping=20000 exists=20000 hmget=20000 elapsed=28.869s command_errors=0 ping_false=0 breaker_open=0
 PASS go-zero breaker stayed closed
 RESULT PASS
 ```
@@ -178,5 +249,5 @@ community Pod has no matching breaker errors in its available logs.
 ```
 
 `deploy-ping-fixed-pod.sh` intentionally does not update or delete the old
-Deployment, Pod, or Service. Re-testing the old Pod is opt-in with
+Deployment, Pod, or Service. Re-testing an old Pod is opt-in with
 `TEST_OLD=true` because its persistent PING leak has already been reproduced.

@@ -150,6 +150,8 @@ typedef struct client {
     int multi_transaction;
     clientRequest *multi_request;
     clusterNode *multi_transaction_node;
+    int authenticated;              /* Whether the client passed the proxy's
+                                     * configured authentication gate. */
     sds auth_user;                  /* Used by client who wants to authenticate
                                      * itself with different credentials from
                                      * the ones used in the proxy config */

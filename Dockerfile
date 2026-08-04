@@ -25,6 +25,6 @@ WORKDIR /home/app
 EXPOSE 7777
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
-    CMD redis-cli -h 127.0.0.1 -p 7777 PING | grep -qx PONG
+    CMD redis-cli -h 127.0.0.1 -p 7777 PING | grep -Eq '^(PONG|NOAUTH Authentication required\.)$'
 
 ENTRYPOINT ["/usr/local/bin/redis-cluster-proxy"]

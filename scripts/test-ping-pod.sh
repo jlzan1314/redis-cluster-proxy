@@ -13,6 +13,12 @@ HOST=127.0.0.1
 PORT=7777
 READY_FILE="/tmp/ping-load-ready.$$"
 PIPE_OUTPUT="/tmp/ping-load-output.$$"
+PASSWORD=$(awk '$1 == "auth" { print $2; exit }' /etc/redis/proxy.conf)
+if [ -z "$PASSWORD" ]; then
+  echo "missing auth password in /etc/redis/proxy.conf" >&2
+  exit 1
+fi
+export REDISCLI_AUTH="$PASSWORD"
 
 cleanup() {
   rm -f "$READY_FILE" "$PIPE_OUTPUT"
@@ -29,6 +35,9 @@ echo "message_ping=$(redis-cli -h "$HOST" -p "$PORT" --raw PING health-check)"
 
 before=$(used_memory)
 (
+  password_length=${#PASSWORD}
+  printf '*2\r\n$4\r\nAUTH\r\n$%s\r\n%s\r\n' \
+    "$password_length" "$PASSWORD"
   i=0
   while [ "$i" -lt "$COUNT" ]; do
     printf '*1\r\n$4\r\nPING\r\n'
@@ -56,7 +65,7 @@ after=$(used_memory)
 delta=$((after - before))
 
 wait "$pipe_pid"
-reply_count=$(wc -l < "$PIPE_OUTPUT" | tr -d ' ')
+reply_count=$(grep -c '^+PONG' "$PIPE_OUTPUT" || true)
 
 echo "used_memory_before=$before"
 echo "used_memory_during_persistent_ping=$after"

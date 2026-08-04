@@ -123,6 +123,42 @@ static proxyThread *createProxyThread(int index);
 static void freeProxyThread(proxyThread *thread);
 static void *execProxyThread(void *ptr);
 static client *createClient(int fd, char *ip);
+
+static int secureStringEquals(const char *expected, size_t expected_len,
+                              const char *actual, size_t actual_len)
+{
+    size_t i;
+    unsigned char different = (expected_len != actual_len);
+    size_t compare_len = expected_len > actual_len ? expected_len : actual_len;
+
+    for (i = 0; i < compare_len; i++) {
+        unsigned char expected_byte =
+            (i < expected_len ? (unsigned char) expected[i] : 0);
+        unsigned char actual_byte =
+            (i < actual_len ? (unsigned char) actual[i] : 0);
+        different |= expected_byte ^ actual_byte;
+    }
+    return different == 0;
+}
+
+/* The configured credentials serve two distinct purposes: authenticating the
+ * proxy's connections to Redis Cluster and protecting the proxy listener.
+ * Upstream connections are authenticated eagerly, while each downstream
+ * client must prove the same credentials before its commands are routed. */
+static int isConfiguredAuthUser(sds user) {
+    const char *expected_user = config.auth_user ? config.auth_user : "default";
+    size_t expected_len = strlen(expected_user);
+
+    if (user == NULL) return config.auth_user == NULL;
+    return secureStringEquals(expected_user, expected_len, user, sdslen(user));
+}
+
+static int matchesConfiguredAuth(sds user, sds passw) {
+    if (config.auth == NULL || passw == NULL || !isConfiguredAuthUser(user))
+        return 0;
+    return secureStringEquals(config.auth, strlen(config.auth),
+                              passw, sdslen(passw));
+}
 static void unlinkClient(client *c);
 static void freeClient(client *c);
 static clientRequest *createRequest(client *c);
@@ -751,14 +787,15 @@ int pingCommand(void *r) {
  * The proxy continues to emit RESP2-compatible command replies. RESP3
  * clients accept the RESP2 array representation of the HELLO map, and the
  * response explicitly reports the protocol requested by the client. AUTH is
- * accepted here because a proxy configured with upstream credentials already
- * authenticates every connected client automatically. SETNAME is connection
+ * validated locally because the shared upstream connections are already
+ * authenticated with the configured credentials. SETNAME is connection
  * metadata and is intentionally kept local. */
 int helloCommand(void *r) {
     clientRequest *req = r;
     client *c = req->client;
     long protocol = 2;
     int i = 1;
+    sds auth_user = NULL, auth_passw = NULL;
 
     if (req->argc > 1) {
         sds version = sdsnewlen(req->buffer + req->offsets[1],
@@ -780,6 +817,12 @@ int helloCommand(void *r) {
         sds option = sdsnewlen(req->buffer + req->offsets[i],
                                req->lengths[i]);
         if (strcasecmp(option, "auth") == 0 && i + 2 < req->argc) {
+            if (auth_user != NULL) sdsfree(auth_user);
+            if (auth_passw != NULL) sdsfree(auth_passw);
+            auth_user = sdsnewlen(req->buffer + req->offsets[i + 1],
+                                  req->lengths[i + 1]);
+            auth_passw = sdsnewlen(req->buffer + req->offsets[i + 2],
+                                   req->lengths[i + 2]);
             i += 3;
         } else if (strcasecmp(option, "setname") == 0 &&
                    i + 1 < req->argc)
@@ -787,12 +830,34 @@ int helloCommand(void *r) {
             i += 2;
         } else {
             sdsfree(option);
+            if (auth_user != NULL) sdsfree(auth_user);
+            if (auth_passw != NULL) sdsfree(auth_passw);
             addReplyError(c, "syntax error", req->id);
             freeRequest(req);
             return PROXY_COMMAND_HANDLED;
         }
         sdsfree(option);
     }
+
+    if (config.auth != NULL) {
+        if (auth_passw != NULL) {
+            if (!matchesConfiguredAuth(auth_user, auth_passw)) {
+                addReplyError(c, "-WRONGPASS invalid username-password pair "
+                                 "or user is disabled.", req->id);
+                sdsfree(auth_user);
+                sdsfree(auth_passw);
+                freeRequest(req);
+                return PROXY_COMMAND_HANDLED;
+            }
+            c->authenticated = 1;
+        } else if (!c->authenticated) {
+            addReplyError(c, "-NOAUTH Authentication required.", req->id);
+            freeRequest(req);
+            return PROXY_COMMAND_HANDLED;
+        }
+    }
+    if (auth_user != NULL) sdsfree(auth_user);
+    if (auth_passw != NULL) sdsfree(auth_passw);
 
     sds reply = sdscatprintf(sdsempty(),
         "*14\r\n"
@@ -941,6 +1006,7 @@ int authCommand(void *r) {
     sds user = NULL, passw = NULL;
     if (req->argc == 1) {
         addReplyErrorWrongArgc(c, "auth", req->id);
+        freeRequest(req);
         status = PROXY_COMMAND_HANDLED;
         goto final;
     } else if (req->argc == 2) {
@@ -950,7 +1016,7 @@ int authCommand(void *r) {
             goto final;
         }
         passw = sdsnewlen(req->buffer + req->offsets[1], req->lengths[1]);
-    } else if (req->argc > 2) {
+    } else if (req->argc == 3) {
         if (req->offsets_size < 3) {
             unlinkClient(c);
             status = PROXY_COMMAND_HANDLED;
@@ -958,6 +1024,31 @@ int authCommand(void *r) {
         }
         user = sdsnewlen(req->buffer + req->offsets[1], req->lengths[1]);
         passw = sdsnewlen(req->buffer + req->offsets[2], req->lengths[2]);
+    } else {
+        addReplyErrorWrongArgc(c, "auth", req->id);
+        freeRequest(req);
+        status = PROXY_COMMAND_HANDLED;
+        goto final;
+    }
+    if (config.auth != NULL && isConfiguredAuthUser(user)) {
+        if (matchesConfiguredAuth(user, passw)) {
+            c->authenticated = 1;
+            addReplyString(c, "OK", req->id);
+        } else {
+            addReplyError(c, "-WRONGPASS invalid username-password pair or "
+                             "user is disabled.", req->id);
+        }
+        freeRequest(req);
+        status = PROXY_COMMAND_HANDLED;
+        goto final;
+    } else if (config.auth != NULL && !c->authenticated) {
+        /* Do not allow an unauthenticated client to bypass the proxy gate by
+         * selecting another ACL user on a private upstream connection. */
+        addReplyError(c, "-WRONGPASS invalid username-password pair or user "
+                         "is disabled.", req->id);
+        freeRequest(req);
+        status = PROXY_COMMAND_HANDLED;
+        goto final;
     }
     if ((user && (!config.auth_user || strcmp(user, config.auth_user)) != 0) ||
         (!user && config.auth_user))
@@ -2864,6 +2955,7 @@ static client *createClient(int fd, char *ip) {
     c->multi_transaction = 0;
     c->multi_request = NULL;
     c->multi_transaction_node = NULL;
+    c->authenticated = (config.auth == NULL);
     c->auth_user = NULL;
     c->auth_passw = NULL;
     c->clients_lnode = NULL;
@@ -4570,6 +4662,14 @@ int processRequest(clientRequest *req, int *parsing_status,
         proxyLogDebug("Command for request " REQID_PRINTF_FMT  ": '%s' "
                       "(use --dump-queries for full query dump)",
                       REQID_PRINTF_ARG(req), command_name);
+    }
+    if (config.auth != NULL && !c->authenticated &&
+        strcmp(command_name, "auth") != 0 && strcmp(command_name, "hello") != 0)
+    {
+        addReplyError(c, "-NOAUTH Authentication required.", req->id);
+        sdsfree(command_name);
+        freeRequest(req);
+        return 1;
     }
     redisCommandDef *cmd = getRedisCommand(command_name);
     /* Unsupported commands:

@@ -164,9 +164,8 @@ Examples:
 
 `redis-cluster-proxy --auth-user MYUSER --auth MYPASSWORD 127.0.0.1:7000`
 
-The proxy will use these credentials to authenticate to the cluster and fetch the cluster's internal configuration, but it will also automatically authenticate all clients with the provided credentials.
-So, **all clients** that will connect to the proxy will be **automatically authenticated** with the user that is specified by `--auth-user` or with the `default` user if no user has been specified, **without the need** to call the `AUTH` command by themselves.
-Anyway, if any client wants to be authenticated with a different user, it always can call the Redis `AUTH` command (documented [here](https://redis.io/commands/auth)): in this case, the client will use a private connection instead of the shared, multiplexed connection, and it will authenticate with another user.
+The proxy uses these credentials to authenticate to the cluster and fetch the cluster's internal configuration. It also protects the proxy listener with the same credentials: every client must call `AUTH` (or use `HELLO ... AUTH`) before issuing other commands. Unauthenticated commands receive `NOAUTH Authentication required.`.
+After passing this listener authentication gate, a client can authenticate as a different ACL user. In that case the client uses a private connection instead of the shared, multiplexed connection.
 
 # Enabling cross-slots queries
 

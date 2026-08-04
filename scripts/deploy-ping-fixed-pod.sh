@@ -37,6 +37,7 @@ else
   echo "old pod tests skipped (set TEST_OLD=true to compare again)"
 fi
 echo "new pod: $POD"
+"$ROOT_DIR/scripts/test-auth-pod.sh" "$POD" "$NAMESPACE" required
 "$ROOT_DIR/scripts/test-ping-pod.sh" "$POD" "$NAMESPACE"
 "$ROOT_DIR/scripts/test-lua-pod.sh" "$POD" "$NAMESPACE" supported
 NAMESPACE="$NAMESPACE" POD="$POD" "$ROOT_DIR/scripts/test-gozero-pod.sh"

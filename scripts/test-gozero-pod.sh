@@ -37,6 +37,16 @@ grep -q 'Forwarding from' "$LOG_FILE" || {
   exit 1
 }
 
+REDIS_PASSWORD=${REDIS_PASSWORD:-$(
+  kubectl exec -n "$NAMESPACE" "$POD" -- \
+    awk '$1 == "auth" { print $2; exit }' /etc/redis/proxy.conf
+)}
+if [[ -z "$REDIS_PASSWORD" ]]; then
+  echo "missing auth password in /etc/redis/proxy.conf" >&2
+  exit 1
+fi
+export REDIS_PASSWORD
+
 (
   cd "$ROOT_DIR/test/gozero"
   go run . "127.0.0.1:$LOCAL_PORT"

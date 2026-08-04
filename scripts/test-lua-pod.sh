@@ -13,6 +13,12 @@ HOST=127.0.0.1
 PORT=7777
 KEY="{lua-pod-check}:$$"
 SCRIPT_BODY='return redis.call("SET",KEYS[1],ARGV[1])'
+PASSWORD=$(awk '$1 == "auth" { print $2; exit }' /etc/redis/proxy.conf)
+if [ -z "$PASSWORD" ]; then
+  echo "missing auth password in /etc/redis/proxy.conf" >&2
+  exit 1
+fi
+export REDISCLI_AUTH="$PASSWORD"
 
 eval_reply=$(redis-cli -h "$HOST" -p "$PORT" --raw \
   EVAL "$SCRIPT_BODY" 1 "$KEY" eval-value 2>&1 || true)

@@ -65,8 +65,36 @@ end
 
 
 
+test 'proxy requires configured credentials from every client' do
+    client = Redis.new port: @aux_proxy.port
+    reply = redis_command client, :ping
+    assert_redis_err(reply)
+    assert(reply.to_s['NOAUTH'], "Expected NOAUTH, got '#{reply}'")
+
+    reply = redis_command client, :auth, 'wrong-password'
+    assert_redis_err(reply)
+    assert(reply.to_s['WRONGPASS'], "Expected WRONGPASS, got '#{reply}'")
+
+    reply = redis_command client, :auth, $authpassw
+    assert_not_redis_err(reply)
+    assert_equal(reply, 'OK')
+    assert_equal(client.ping, 'PONG')
+end
+
+test 'HELLO AUTH opens the authentication gate' do
+    client = Redis.new port: @aux_proxy.port
+    reply = client.call('HELLO', 2, 'AUTH', 'default', $authpassw)
+    assert_class(reply, Array)
+    hello = Hash[*reply]
+    assert_equal(hello['server'], 'redis-cluster-proxy')
+    assert_equal(hello['proto'], 2)
+    assert_equal(client.ping, 'PONG')
+end
+
 test "SET #{$numkeys} keys (clients=#{$numclients})" do
     spawn_clients($numclients, proxy: $aux_proxy){|client, idx|
+        reply = redis_command client, :auth, $authpassw
+        assert_not_redis_err(reply)
         (0...$numkeys).each{|n|
             log_test_update "key #{n + 1}/#{$numkeys}"
             val = n.to_s
@@ -80,6 +108,8 @@ end
 
 test "GET #{$numkeys} keys (clients=#{$numclients}, multiplex=off)" do
     spawn_clients($numclients, proxy: $aux_proxy){|client, idx|
+        auth_reply = redis_command client, :auth, $authpassw
+        assert_not_redis_err(auth_reply)
         expected = ['OK']
         keys = (0...$numkeys).map{|n|
             key = "k:#{n}"
@@ -115,6 +145,8 @@ test 'AUTH as restricted user' do
     end
 
     spawn_clients($numclients, proxy: $aux_proxy){|client, idx|
+        reply = redis_command client, :auth, $authpassw
+        assert_not_redis_err(reply)
         use_restricted_user = ((idx % 2) == 0)
         if use_restricted_user
             begin

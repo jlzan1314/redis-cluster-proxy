@@ -39,6 +39,7 @@ func main() {
 	rdb, err := zredis.NewRedis(zredis.RedisConf{
 		Host:        addr,
 		Type:        zredis.NodeType,
+		Pass:        os.Getenv("REDIS_PASSWORD"),
 		NonBlock:    false,
 		PingTimeout: 3 * time.Second,
 	})
