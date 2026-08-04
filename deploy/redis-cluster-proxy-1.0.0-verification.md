@@ -8,9 +8,11 @@ Date: 2026-08-04 (Asia/Shanghai)
 - Tag: `gamesirnanjing.asuscomm.com:5000/gamehub/redis-cluster-proxy:1.0.0`
 - Digest: `sha256:0ea244111fd5a680f28ea17e258e313f3bb04ed96fe7c00aa33163a75776534a`
 - Source branch: `fix/ping-request-leak`
-- Source base revision: `06e92e9fa207ebb8167ca26b6e97b7db3c4de098`
-- The downstream authentication changes are in the current working tree; the
-  image digest above is the authoritative deployed artifact identity.
+- Source commit: `00ef7087fe7338c39cc3a516d12813e25d7c58ef`
+- The deployed image was built from the equivalent pre-commit working tree,
+  so its embedded base revision is `06e92e9fa207ebb8167ca26b6e97b7db3c4de098`
+  with the dirty flag set. The image digest above is the authoritative deployed
+  artifact identity.
 
 ## Initial canary Pods (2026-08-03)
 
